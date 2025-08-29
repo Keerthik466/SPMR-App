@@ -84,7 +84,13 @@ def create_app():
             "token": token
         }), 200
 
-    # ---------- Save Vitals ----------
+    # ---------- Vitals ----------
+    @app.route("/vitals/<int:patient_id>", methods=["GET"])
+    @jwt_required()
+    def get_vitals(patient_id):
+        vitals = Vital.query.filter_by(patient_id=patient_id).all()
+        return jsonify([v.to_dict() for v in vitals])
+
     @app.route("/saveVitals", methods=["POST"])
     @jwt_required()
     def save_vitals():
@@ -105,9 +111,73 @@ def create_app():
             raw=str(data)
         )
         db.session.add(vital)
+
+        # ---------- Alerts ----------
+        if hr and hr > 120 or spo2 and spo2 < 90:
+            alert = Alert(patient_id=patient_id, message="Vitals critical!")
+            db.session.add(alert)
+
         db.session.commit()
 
         return jsonify({"success": True, "message": "Vitals saved successfully"}), 201
+
+    # ---------- Patients ----------
+    @app.route("/patients", methods=["POST"])
+    @jwt_required()
+    def add_patient():
+        current_user_id = get_jwt_identity()
+        data = request.get_json()
+        name = data.get("name")
+        age = data.get("age")
+
+        if not name:
+            return jsonify({"success": False, "message": "Name is required"}), 400
+
+        patient = Patient(name=name, age=age, owner_id=current_user_id)
+        db.session.add(patient)
+        db.session.commit()
+
+        return jsonify({"success": True, "patient_id": patient.id, "name": patient.name}), 201
+
+    @app.route("/patients", methods=["GET"])
+    @jwt_required()
+    def get_patients():
+        current_user_id = get_jwt_identity()
+        patients = Patient.query.filter_by(owner_id=current_user_id).all()
+        return jsonify([
+            {"id": p.id, "name": p.name, "age": p.age} for p in patients
+        ]), 200
+
+    # ---------- Alerts ----------
+    @app.route("/alerts/<int:patient_id>", methods=["GET"])
+    @jwt_required()
+    def get_alerts(patient_id):
+        alerts = Alert.query.filter_by(patient_id=patient_id).all()
+        return jsonify([
+            {
+                "id": a.id,
+                "severity": a.severity,
+                "message": a.message,
+                "timestamp": a.timestamp
+            } for a in alerts
+        ]), 200
+
+    @app.route("/alerts", methods=["POST"])
+    @jwt_required()
+    def add_alert():
+        data = request.get_json()
+        patient_id = data.get("patient_id")
+        severity = data.get("severity", "Alert")
+        message = data.get("message", "No message provided")
+
+        if not patient_id:
+            return jsonify({"success": False, "message": "Patient ID required"}), 400
+
+        alert = Alert(patient_id=patient_id, severity=severity, message=message)
+        db.session.add(alert)
+        db.session.commit()
+
+        return jsonify({"success": True, "alert_id": alert.id}), 201
 
     return app
 
