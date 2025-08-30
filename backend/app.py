@@ -102,24 +102,46 @@ def create_app():
         temp = data.get("temp")
         rr = data.get("rr", None)
 
+    # Save the vital
         vital = Vital(
-            patient_id=patient_id,
-            hr=hr,
-            spo2=spo2,
-            temp=temp,
+           patient_id=patient_id,
+           hr=hr,
+           spo2=spo2,
+           temp=temp,
             rr=rr,
             raw=str(data)
-        )
+          )
         db.session.add(vital)
-
-        # ---------- Alerts ----------
-        if hr and hr > 120 or spo2 and spo2 < 90:
-            alert = Alert(patient_id=patient_id, message="Vitals critical!")
-            db.session.add(alert)
-
         db.session.commit()
 
-        return jsonify({"success": True, "message": "Vitals saved successfully"}), 201
+    # --------- Automatic alert check ---------
+        alert_triggered = False
+        alert_message = ""
+
+        if hr and hr > 120:
+            alert_triggered = True
+            alert_message += f"Heart rate too high ({hr})! "
+
+        if spo2 and spo2 < 90:
+            alert_triggered = True
+            alert_message += f"SpO2 too low ({spo2})! "
+
+        if alert_triggered:
+            alert = Alert(
+                patient_id=patient_id,
+                severity="Critical",
+                message=alert_message
+           )
+            db.session.add(alert)
+            db.session.commit()
+
+        return jsonify({
+        "success": True,
+        "message": "Vitals saved successfully",
+        "alert_triggered": alert_triggered,
+        "alert_message": alert_message if alert_triggered else None
+        }), 201
+
 
     # ---------- Patients ----------
     @app.route("/patients", methods=["POST"])
