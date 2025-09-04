@@ -2,9 +2,12 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import os
 from models import db, User, Patient, Vital, Alert
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity,get_jwt
 from flask_cors import CORS
 from datetime import timedelta
+from auth_utils import role_required
+from flask_mail import Mail, Message
+
 
 load_dotenv()  # load environment variables
 
@@ -23,6 +26,14 @@ def create_app():
     app.config['ALERT_EMAIL_TO'] = os.getenv('ALERT_EMAIL_TO')
     app.config['CHATBOT_URL'] = os.getenv('CHATBOT_URL')
 
+    app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+    app.config['MAIL_PORT'] = 587
+    app.config['MAIL_USE_TLS'] = True
+    app.config['MAIL_USERNAME'] = "your_email@gmail.com"   # replace
+    app.config['MAIL_PASSWORD'] = "your_app_password"      # replace
+    app.config['MAIL_DEFAULT_SENDER'] = "your_email@gmail.com"
+    
+    mail = Mail(app)
     # ---------- Init Extensions ----------
     db.init_app(app)
     JWTManager(app)
@@ -44,6 +55,7 @@ def create_app():
         username = data.get("username")
         email = data.get("email")
         password = data.get("password")
+        role = data.get("role", "user")
 
         if not username or not email or not password:
             return jsonify({"message": "All fields are required", "success": False}), 400
@@ -54,7 +66,7 @@ def create_app():
             return jsonify({"message": "Email already registered", "success": False}), 400
 
         # Create user
-        user = User(username=username, email=email)
+        user = User(username=username, email=email, role=role)
         user.set_password(password)  # uses method in User model
         db.session.add(user)
         db.session.commit()
@@ -62,6 +74,26 @@ def create_app():
         return jsonify({"message": "User registered successfully", "success": True}), 201
 
     # ---------- Login ----------
+    @app.route("/patient/dashboard", methods=["GET"])
+    @jwt_required()
+    @role_required(["patient","doctor", "admin"])   # only patient can access
+    def patient_dashboard():
+       return jsonify({"msg": "Welcome Patient!"})
+
+
+    @app.route("/doctor/dashboard", methods=["GET"])
+    @jwt_required()
+    @role_required(["doctor", "admin"])  # doctor and admin can access
+    def doctor_dashboard():
+       return jsonify({"msg": "Welcome Doctor!"})
+
+
+    @app.route("/admin/dashboard", methods=["GET"])
+    @jwt_required()
+    @role_required(["admin"])  # only admin
+    def admin_dashboard():
+        return jsonify({"msg": "Welcome Admin!"})
+
     @app.route("/login", methods=["POST"])
     def login():
         data = request.get_json()
@@ -76,15 +108,30 @@ def create_app():
             return jsonify({"message": "Invalid credentials", "success": False}), 401
 
         # Create JWT token
-        token = create_access_token(identity=str(user.id), expires_delta=timedelta(hours=1))
+        token = create_access_token(
+        identity=str(user.id),  
+        additional_claims={"role": user.role},
+        expires_delta=timedelta(hours=1)
+      )
 
         return jsonify({
             "message": "Login successful",
             "success": True,
             "token": token
         }), 200
+    
+    
+    @app.route("/adminonly", methods=["GET"])
+    @jwt_required()
+    def admin_only():
+        claims = get_jwt()
+        if claims.get("role") != "admin":
+           return jsonify({"msg": "Admins only!"}), 403
+        return jsonify({"msg": "Welcome, Admin!"})
+
 
     # ---------- Vitals ----------
+   
     @app.route("/vitals/<int:patient_id>", methods=["GET"])
     @jwt_required()
     def get_vitals(patient_id):
@@ -200,7 +247,33 @@ def create_app():
         db.session.commit()
 
         return jsonify({"success": True, "alert_id": alert.id}), 201
+    
+    @app.route("/send_email", methods=["POST"])
+    @jwt_required()
+    def send_email():
+        claims = get_jwt()
+        role = claims.get("role")
 
+    # only doctor and admin can send mails
+        if role not in ["doctor", "admin"]:
+           return jsonify({"msg": "Not authorized"}), 403
+
+        data = request.get_json()
+        recipient = data.get("recipient")
+        subject = data.get("subject")
+        body = data.get("body")
+
+        if not recipient or not subject or not body:
+            return jsonify({"msg": "Missing fields"}), 400
+
+        try:
+            msg = Message(subject, recipients=[recipient])
+            msg.body = body
+            mail.send(msg)
+            return jsonify({"msg": "Email sent successfully"})
+        except Exception as e:
+             return jsonify({"msg": str(e)}), 500
+ 
     return app
 
 
